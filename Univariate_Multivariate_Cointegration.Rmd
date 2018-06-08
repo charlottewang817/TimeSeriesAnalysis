@@ -1,0 +1,394 @@
+---
+title: "Time Series Analysis Project"
+author: "Vidita Gawade, Charlotte Wang, Antong Su"
+date: "4/12/2018"
+output: html_document
+---
+
+CLEAR ANY PREVIOUS SAVED VARIABLES and READ IN DATA FILES
+```{r}
+rm(list=ls())
+CS <- read.csv(file="Consumer_Sentiment.csv", header=TRUE) # Consumer sentiment
+RFS <- read.csv(file="Retail_Food_Sales.csv",header=FALSE) # Retail food sales
+```
+
+OBSERVE ORIGINAL TIME SERIES OBJECTS to see that data gets read in correctly and see general observation.
+```{r}
+index_ts1 <- ts(CS$Index, frequency = 12, start=c(1992,1))
+retail_ts1 <- ts(RFS, frequency=12, start=c(1992,1));
+ts.plot(index_ts1);ts.plot(retail_ts1)
+```
+
+READ IN NECESSARY LIBRARIES
+```{r,warning=FALSE,message=FALSE}
+
+library(CADFtest)
+
+library(vars)
+
+library(MTS)
+
+library(urca)
+```
+
+UNIVARIATE ANALYSIS CHARLOTTE
+```{r}
+attach(CS)
+index_ts <- ts(Index, frequency = 12, start=c(1992,1))
+ts.plot(index_ts)
+```
+First explore time series data: we don't see any trends in the plot, and we will confirm this with the CADF test.
+```{r}
+library(CADFtest)
+max.lag<-round(sqrt(length(index_ts))) 
+CADFtest(index_ts, type= "drift", criterion= "BIC", max.lag.y=max.lag)
+```
+The p-value for the stationarity test on the index_ts object is 0.0792, therefore we cannot reject the null hypothesis that the object is not stationary.
+
+```{r}
+dindex_ts <- diff(index_ts)
+ts.plot(dindex_ts) 
+```
+We don't see any trends in the plot, and we will confirm this with the CADF test.
+
+```{r, warning=FALSE, message=FALSE}
+library(CADFtest)
+max.lag<-round(sqrt(length(dindex_ts)))
+CADFtest(dindex_ts,type="drift",max.lag.y=max.lag,criterion="BIC")
+```
+The p-value for the stationarity test on the dindex_ts object is less than 0.05, therefore we reject reject the null hypothesis that the object is not stationary. Now we have a stationary time series. index_ts is integrated of order 1.
+
+```{r}
+monthplot(dindex_ts)
+```
+
+No seasonality is shown in the plot. 
+
+```{r}
+acf(dindex_ts,lag.max=50) #MA(2)
+pacf(dindex_ts,lag.max=50) #AR(2)
+```
+We can specify a moving average model with an order of 2 from acf. Because roughly no significant peaks after 2.
+We can specify a autoregressive model with an order of 2 from pacf. Because roughly no significant peaks after 2.
+
+
+```{r, warning=FALSE,message=FALSE}
+library(forecast)
+fit_ma <- Arima(index_ts, order = c(0,1,2))
+fit_ma
+abs(fit_ma$coef/sqrt(diag(fit_ma$var.coef)))
+```
+ma2 is significant, we could go with MA(2)
+
+```{r}
+ts.plot(fit_ma$residuals)
+acf(fit_ma$residuals)
+Box.test(fit_ma$residuals, lag = max.lag, type = "Ljung-Box")
+```
+no significant structures in residual acf plot, and p-value=0.4825>0.05, we cannot reject the null hypothesis. Residuals are white noise, and the model is validated.
+
+```{r}
+fit_ar <- Arima(index_ts, order = c(2,1,0), seasonal = c(0,0,0))
+fit_ar
+abs(fit_ar$coef/sqrt(diag(fit_ar$var.coef)))
+```
+ar2 is significant, we could go with AR(2)
+
+```{r}
+ts.plot(fit_ar$residuals)
+acf(fit_ar$residuals)
+Box.test(fit_ar$residuals, lag = max.lag, type = "Ljung-Box")
+
+```
+no significant structures in residual acf plot, and p-value=0.353>0.05, we cannot reject the null hypothesis. Residuals are white noise, and the model is validated.
+
+```{r}
+BIC(fit_ma)
+BIC(fit_ar)
+```
+BIC(fit_ma) = 1734.179
+BIC(fit_ar) = 1736.41
+MA(2) model is better, closer to the truth, given a smaller BIC
+
+```{r}
+forecast_MA <- predict(fit_ma, n.ahead = 12) #how many lags ahead we want to forecast
+names(forecast_MA)
+expected <- forecast_MA$pred
+```
+
+```{r}
+lower <- forecast_MA$pred - qnorm(0.975)*forecast_MA$se
+upper <- forecast_MA$pred + qnorm(0.975)*forecast_MA$se
+cbind(lower, expected, upper)
+```
+
+```{r}
+plot.ts(index_ts, xlim=c(1992, 2018), main = "Forecast: MA", xlab = "Year")
+lines(expected, col = "red")
+lines(lower, col = "blue")
+lines(upper, col = "blue")
+```
+
+```{r}
+forecast_AR <- predict(fit_ar, n.ahead = 12) #how many lags ahead we want to forecast
+names(forecast_AR)
+expected <- forecast_AR$pred
+```
+
+```{r}
+lower <- forecast_AR$pred - qnorm(0.975)*forecast_AR$se
+upper <- forecast_AR$pred + qnorm(0.975)*forecast_AR$se
+cbind(lower, expected, upper)
+```
+
+```{r}
+plot.ts(index_ts, xlim=c(1992, 2018), main = "Forecast: AR", xlab = "Year")
+lines(expected, col = "red")
+lines(lower, col = "blue")
+lines(upper, col = "blue")
+```
+
+```{r}
+y <- index_ts
+S <- round(0.75*length(y)) # using 75% of data as training set
+h <- 1 # forecasting window
+errorMA.h <- c() # Initialization (empty vector)
+for (i in S:(length(y)-h))  # Expanding Window Forecast (MA)
+{
+  mymodel.sub <- Arima(y[1:i], order = c(0,1,2))
+  predict.h <- predict(mymodel.sub, n.ahead = h)$pred[h]
+  errorMA.h <- c(errorMA.h, y[i+h] - predict.h)
+}
+
+errorAR.h <- c()
+for (i in S:(length(y)-h))  # Expanding Window Forecast (AR)
+{
+  mymodel.sub <- Arima(y[1:i], order = c(2,1,0))
+  predict.h <- predict(mymodel.sub, n.ahead = h)$pred[h]
+  errorAR.h <- c(errorAR.h, y[i+h] - predict.h)
+}
+
+#cbind(errorMA.h, errorAR.h)
+```
+
+We first look at mean absolute error
+```{r}
+MAE1 <- mean(abs(errorMA.h))
+MAE1
+MAE2 <- mean(abs(errorAR.h))
+MAE2
+
+dm.test(errorMA.h, errorAR.h, h = h, power = 1)
+```
+
+p-value = 0.436 > 0.05, we fail to reject the null hypothesis, therefore there is no evidence to prove that two errors from MA(2) model and AR(2) model are different.
+
+We could also look at mean squared error
+```{r}
+MSE1 <- mean(errorMA.h^2)
+MSE1
+MSE2 <- mean(errorAR.h^2)
+MSE2
+
+dm.test(errorMA.h, errorAR.h, h = h, power = 2)
+```
+p-value = 0.791 > 0.05, we fail to reject the null hypothesis, again there is no evidence to prove that two errors from MA(2) model and AR(2) model are different.
+
+
+MULTIVARIATE ANALYSIS
+
+CUT TIME PERIOD FOR BOTH TIME SERIES to avoid recession 
+```{r}
+index_ts <- ts(CS$Index, frequency = 12,start=c(1992,1),end=c(2007,12))
+retail_ts <- ts(RFS, frequency=12, start=c(1992,1),end=c(2007,12));
+ts.plot(index_ts);ts.plot(retail_ts)
+
+#below plotting both time series in same does not work since they have different 
+#magnitude y values
+#ts.plot(index_ts,retail_ts, col=c("black", "red"))
+#legend("topright", legend = c("index", "retail"), col = c("black", "red"), lty = 1)
+```
+
+CHECK FOR STATIONARITY 
+
+The plot for the retail sales dataset shows that it has a trend. In general, the retail sales increases over time. We will perform a unit root test on the retail sales time series to determine if it is stationary or not based on the p value we get. If the p value of the time series retail sales is > 0.05 then we can say that the original time series is not stationary and we must do some changes to make it stationary.
+
+```{r}
+max.lag<-round(sqrt(length(retail_ts))) 
+CADFtest(retail_ts, type= "trend", criterion= "BIC", max.lag.y=max.lag)  
+```
+Since original retail time series is not stationary (p value is 0.7668 which is greater than 0.05 in CADF test), we cannot reject the null hypothesis that the time series object is stationary. 
+
+Since the retail food sales object retail_ts is not stationary, we will try the log of the retail_ts and see if that will give a stationary object. 
+
+Log of retail food sales:
+```{r}
+ts_sales_log <- log(retail_ts)
+ts.plot(ts_sales_log)
+```
+
+There is still a trend on the log(retail_ts), but we will confirm this with the CADF test.
+```{r}
+max.lag<-round(sqrt(length(ts_sales_log))) 
+CADFtest(ts_sales_log, type= "trend", criterion= "BIC", max.lag.y=max.lag)
+```
+The p-value for the stationarity test on the log(retail_ts) object is 0.1734, therefore we cannot reject the null hypothesis that the object is not stationary.
+
+We will try going in differences on the original retail_ts object. 
+```{r}
+ts_sales_diff <- diff(retail_ts)
+ts.plot(ts_sales_diff)
+```
+Our plot no longer shows a trend, which is good. We will confirm this with a CADF test
+```{r}
+max.lag<-round(sqrt(length(ts_sales_diff))) 
+CADFtest(ts_sales_diff, type= "drift", criterion= "BIC", max.lag.y=max.lag)
+```
+
+The original time series dataset in differences shows no trend. Furthermore, the unit root test results in a p-value of less than 2.2e-16 which is less than significant level 0.05. Therefore we can reject our null hypotehsis and state that the retail sales object is stationary in differences. 
+
+We will now perform unit root test on consumer sentiment index - index_ts to make sure that this dataset is also stationary. The plot of the consumer sentiment dataset - index_ts showed no trend, so we apply drift in the test. 
+```{r}
+max.lag <- round(sqrt(length(index_ts)))
+CADFtest(index_ts, type = "drift", criterion = "BIC", max.lag.y = max.lag) 
+```
+
+Since our p value is < 0.05, our time series for consumer sentiment is not statioanry, go in differences as next part will show.
+
+```{r}
+dindex_ts <- diff(index_ts)
+ts.plot(dindex_ts) 
+max.lag<-round(sqrt(length(dindex_ts)))
+CADFtest(dindex_ts,type="drift",max.lag.y=max.lag,criterion="BIC")
+```
+
+Make the cross-correlogram of consumer sentiment index and retail food sales. Is there a significant instantaneous correlation?
+
+Which time series seems to contain predictive power for the other time series?
+```{r}
+ccf(x = dindex_ts, y =ts_sales_diff,lag.max=30)
+```
+
+TRY DISTRIBUTED LAG MODEL 
+```{r}
+lag <- 4 # based on cross-correlogram
+ts_sales_diff_data <- embed(ts_sales_diff, dimension = lag + 1)
+dindex_ts_data <- embed(dindex_ts, dimension = lag + 1)
+#update model we are testing
+fit_dl <- lm(ts_sales_diff_data[, 1] ~ dindex_ts_data) #yt is in first column [,1] [row,col]
+acf(fit_dl$residuals) 
+Box.test(fit_dl$residuals, lag = max.lag, type = "Ljung-Box") 
+```
+
+Residual plots show no significant langs and box test result shows a p value < 0.05 for the residuals of the distributed lag model. Therefore, we cannot validate the distributed lag model.
+
+TRY ADL MODEL 
+
+```{r}
+lag <- 1 # based on cross-correlogram   #lag=2 is validated, then try lag=1
+ts_sales_diff_data <- embed(ts_sales_diff, dimension = lag + 1)
+dindex_data <- embed(dindex_ts, dimension = lag + 1)
+#fit_adl1 <- lm(ts_sales_diff_data[, 1] ~ ts_sales_diff_data[, -1] + dindex_data[,-1]) #yt is in first column [,1] [row,col]
+fit_adl1 <- lm(dindex_data[, 1] ~ ts_sales_diff_data[, -1] + dindex_data[,-1])
+acf(fit_adl1$residuals)
+Box.test(fit_adl1$residuals, lag = round(sqrt(length(fit_adl1$residuals))), type = "Ljung-Box")
+```
+Residual plot shows no significant lags and box test results in p value > 0.05 for the residuals of the autoregressive distributed lag model resulting in valid model. 
+
+
+INVESTIGATE GRANGER CAUSALITY
+```{r}
+#fit_adl2_nox <- lm(ts_sales_diff_data[, 1] ~ ts_sales_diff_data[, -1])
+fit_adl2_nox <- lm(dindex_data[, 1] ~ dindex_data[, -1])
+anova(fit_adl1, fit_adl2_nox)
+
+```
+####Based on p value > 0.05 we cannot reject null hypotehsis. NO GC
+
+Specify and estimate a VAR model + look at the impulse response functions
+```{r}
+mydata <- cbind(dindex_ts,ts_sales_diff)
+VARselect(mydata) # BIC (SC): 1
+```
+For automatic lag selection, AIC selects 2 lags and BIC (SC) selects 1 lag. When we have a situation where both methods are selecting different lags, we will go with the lag that BIC selects since BIC penalizes higher order terms, in this case we select 1. 
+
+```{r}
+varfit <- vars:::VAR(mydata, p = 1)
+varresid <- resid(varfit)
+par(mfrow=c(2,2))
+acf(varresid[,1])
+acf(varresid[,2])
+ccf(varresid[,1],varresid[,2],lag.max=10)
+#we wnat to validate model so look acf. For 2nd time series we have one sig lag, for ccf we have one significant lag. 
+```
+From the CCF plot, we can see there is only one significant lag. For ACF plot of consumer sentiment, there is no singnificant lag, but for ACF plot of retailer sales, there are several significant lags. From the observation above, we need to validate VAR(1) further quantitatively.
+
+multivariate white noise test to assess the validity of this model quantitatively.
+```{r}
+library(MTS)
+mq(varresid, lag = floor(sqrt(dim(varresid)[1])))
+
+#we are interested in last line 
+#null hypothesis R1...R13 = 0. Fail to reject first  are = 0. we validate this model.
+
+```
+From the quantitative test, VAR(1) is validated since p value 0.06 is greater than 0.05.
+
+
+look at the impulse response functions
+```{r}
+irf_var <- irf(varfit, ortho = FALSE, boot = TRUE)
+plot(irf_var)
+
+#below comments are from discussion, to replace with project data comments
+#k*k --> 2*2 = 4 plots. we want the bands to be above and below the 0 line in this case
+#it is not happening. #borderline on 1 and 4 and none elsewhere. 
+
+#cons - 1 unit shock in log diff consumption
+
+#effect of shocks in industrial production: a little bit more going on. IP 1 unit shock
+#sig imact at lag = 1 since band below 0 a neg effect, pos effect at lag=4 and lag=8.
+```
+For the effect of one unit-shock in consumer sentiment on itself, there is no significant lag. For the retailer sales on itself, there is negative significance on lag 1. 
+
+Coitegration
+Validate that the retail sales is I(1)
+```{r}
+CADFtest(diff(retail_ts), type = "drift", criterion = "BIC", max.lag.y = max.lag) # Reject H0 -> log(retail sales) is I(1)
+
+```
+
+Validate that the consumer index is I(1)
+```{r}
+CADFtest(diff(index_ts), type = "drift", criterion = "BIC", max.lag.y = max.lag) # Reject H0 -> log(consumer index) is I(1)
+```
+
+
+```{r}
+data=cbind(retail_ts,index_ts)
+#fit_ci <- lm(retail_ts~index_ts)
+fit_ci <- lm(index_ts~retail_ts)
+res_fit_ci <- fit_ci$residuals
+max.lag <- round(sqrt(length(res_fit_ci)))
+library(CADFtest)
+CADFtest(res_fit_ci, type = "drift", criterion = "BIC", max.lag.y = max.lag) 
+```
+ADF(0) = -2.6533 is greater than -3.41. Accept null, no cointegration
+No cointegration in either direction
+
+```{r}
+VARselect(data, type = "const") # BIC/SC selects p = 2
+
+```
+From BIC, we get p = 2
+
+```{r}
+library(urca)
+trace_test <- ca.jo(data, type = "trace", K = 2, ecdet = "const", spec = "transitory")
+summary(trace_test)
+```
+          test 10pct  5pct  1pct
+r <= 1 | 11.94  7.52  9.24 12.97
+r = 0  | 67.75 17.85 19.96 24.60
+67.75 > 17.85 and 11.94 > 9.24, we reject r <= 1 and reject r = 0 
+No coitegration
